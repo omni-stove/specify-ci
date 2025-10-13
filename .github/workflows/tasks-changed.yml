@@ -17,7 +17,7 @@ permissions:
 jobs:
   execute-tasks:
     if: github.event.pull_request.merged == true
-    uses: ./.github/workflows/tasks-changed-reusable.yml
+    uses: omni-stove/specify-ci/.github/workflows/tasks-changed-reusable.yml@main
     with:
       specs_dir: 'specs'
       base_branch: 'main'

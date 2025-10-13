@@ -45,18 +45,99 @@ tasks.mdが更新されたPRがマージされた際に、自動的に実装プ�
 
 ### 導入手順
 
-#### 1. ワークフローファイルのコピー
+#### 1. ワークフローファイルの作成
 
-プロジェクトに以下のファイルをコピーします:
+**方法A: 直接参照(推奨)**
+
+このリポジトリのワークフローを直接参照することで、ファイルコピー不要で最新版を利用できます。
+
+プロジェクトの `.github/workflows/` に以下のファイルを作成:
+
+```yaml
+# .github/workflows/tasks-changed.yml
+name: Tasks Changed
+
+on:
+  pull_request:
+    types: [closed]
+    paths:
+      - 'specs/**/tasks.md'
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  execute-tasks:
+    if: github.event.pull_request.merged == true
+    uses: omni-stove/specify-ci/.github/workflows/tasks-changed-reusable.yml@main
+    with:
+      specs_dir: 'specs'          # specsディレクトリのパス
+      base_branch: 'main'         # ベースブランチ
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+```yaml
+# .github/workflows/manual-implement.yml
+name: Manual Implementation Trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec_id:
+        description: 'Spec ID (e.g., 001-feature-name)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  trigger-implementation:
+    uses: omni-stove/specify-ci/.github/workflows/manual-implement-reusable.yml@main
+    with:
+      spec_id: ${{ inputs.spec_id }}
+      specs_dir: 'specs'
+      base_branch: 'main'
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+**方法B: ファイルをコピー**
+
+高度なカスタマイズが必要な場合は、以下のファイルをプロジェクトにコピーします:
 
 ```bash
-# 再利用可能なワークフロー（必須）
+# 再利用可能なワークフロー
 .github/workflows/tasks-changed-reusable.yml
 .github/workflows/manual-implement-reusable.yml
 
-# 実装例（カスタマイズして使用）
+# 実装例
 .github/workflows/tasks-changed.yml
 .github/workflows/manual-implement.yml
+```
+
+その後、ローカル参照に変更:
+
+```yaml
+# tasks-changed.yml の例
+jobs:
+  execute-tasks:
+    if: github.event.pull_request.merged == true
+    uses: ./.github/workflows/tasks-changed-reusable.yml  # ローカル参照
+    with:
+      specs_dir: 'specs'          # specsディレクトリのパス
+      base_branch: 'main'         # ベースブランチ
+    secrets:
+      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
 #### 2. GitHub Secretsの設定
@@ -64,24 +145,6 @@ tasks.mdが更新されたPRがマージされた際に、自動的に実装プ�
 リポジトリの Settings > Secrets and variables > Actions で以下を追加:
 
 - `CLAUDE_CODE_OAUTH_TOKEN`: Claude Code OAuth トークン
-
-#### 3. ワークフローのカスタマイズ
-
-プロジェクトに合わせて `tasks-changed.yml` と `manual-implement.yml` を編集:
-
-```yaml
-# tasks-changed.yml の例
-jobs:
-  execute-tasks:
-    if: github.event.pull_request.merged == true
-    uses: ./.github/workflows/tasks-changed-reusable.yml
-    with:
-      specs_dir: 'specs'          # specsディレクトリのパス
-      base_branch: 'main'         # ベースブランチ
-      implement_command: '/implement'  # 実装コマンド
-    secrets:
-      claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-```
 
 ## 使用方法
 
@@ -144,12 +207,22 @@ with:
 
 ## 他のプロジェクトでの使用
 
-このリポジトリのワークフローは、他のプロジェクトから直接参照できます:
+このリポジトリのワークフローは、他のプロジェクトから直接参照できます。
+
+### 利点
+
+- ファイルコピー不要で、常に最新版を利用可能
+- メンテナンスが容易
+- バージョン管理が簡単(`@main`, `@v1.0.0` などでバージョン指定可能)
+
+### 使用例
+
+詳細は「導入手順 > 1. ワークフローファイルの作成 > 方法A: 直接参照(推奨)」を参照してください。
 
 ```yaml
 jobs:
   execute-tasks:
-    uses: your-org/specify-ci/.github/workflows/tasks-changed-reusable.yml@main
+    uses: omni-stove/specify-ci/.github/workflows/tasks-changed-reusable.yml@main
     with:
       specs_dir: 'specs'
       base_branch: 'main'

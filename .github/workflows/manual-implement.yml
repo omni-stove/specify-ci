@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   trigger-implementation:
-    uses: ./.github/workflows/manual-implement-reusable.yml
+    uses: omni-stove/specify-ci/.github/workflows/manual-implement-reusable.yml@main
     with:
       spec_id: ${{ inputs.spec_id }}
       specs_dir: 'specs'
