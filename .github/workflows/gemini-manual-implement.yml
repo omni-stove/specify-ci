@@ -1,0 +1,25 @@
+name: Gemini Manual Implementation Trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec_id:
+        description: 'Spec ID (e.g., 001-feature-name)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  trigger-implementation:
+    uses: ./.github/workflows/gemini-implement-reusable.yml
+    with:
+      spec_id: ${{ inputs.spec_id }}
+      specs_dir: 'specs'
+      base_branch: 'main'
+    secrets:
+      google_credentials: ${{ secrets.GOOGLE_CREDENTIALS }}

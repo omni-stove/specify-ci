@@ -1,0 +1,101 @@
+name: Gemini Implement (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      spec_id:
+        description: 'Spec ID (e.g., 001-feature-name)'
+        required: true
+        type: string
+      specs_dir:
+        description: 'Directory containing specs (default: specs)'
+        required: false
+        type: string
+        default: 'specs'
+      base_branch:
+        description: 'Base branch for PR (default: main)'
+        required: false
+        type: string
+        default: 'main'
+      implement_command:
+        description: 'Specify implement command (default: /implement)'
+        required: false
+        type: string
+        default: '/implement'
+      gemini_model:
+        description: 'Gemini model to use (default: gemini-2.5-pro)'
+        required: false
+        type: string
+        default: 'gemini-2.5-pro'
+    secrets:
+      google_credentials:
+        description: 'Google Cloud credentials JSON'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate spec exists
+        id: validate-spec
+        run: |
+          SPEC_ID="${{ inputs.spec_id }}"
+          SPECS_DIR="${{ inputs.specs_dir }}"
+          TASKS_FILE="$SPECS_DIR/$SPEC_ID/tasks.md"
+
+          if [ ! -f "$TASKS_FILE" ]; then
+            echo "Error: tasks.md not found at $TASKS_FILE"
+            exit 1
+          fi
+
+          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
+          echo "tasks_file=$TASKS_FILE" >> $GITHUB_OUTPUT
+          echo "✅ Found tasks.md at $TASKS_FILE"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.google_credentials }}
+
+      - name: Execute Gemini CLI
+        uses: google-github-actions/run-gemini-cli@v1
+        with:
+          model: ${{ inputs.gemini_model }}
+          prompt: |
+            Run `${{ inputs.implement_command }} ${{ steps.validate-spec.outputs.spec_id }}` and complete the implementation.
+
+            CRITICAL: After ANY work is done (even partial implementation):
+            1. Commit all changes: `git add . && git commit -m "feat: implement ${{ steps.validate-spec.outputs.spec_id }}"`
+            2. Push to remote: `git push -u origin $(git branch --show-current)`
+            3. Create PR: `gh pr create --fill --base ${{ inputs.base_branch }}`
+
+            You MUST complete steps 1-3 even if implementation is incomplete. This is MANDATORY.
+
+      - name: Report summary
+        run: |
+          echo "### Implementation triggered ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Spec**: ${{ steps.validate-spec.outputs.spec_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tasks file**: ${{ steps.validate-spec.outputs.tasks_file }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Model**: ${{ inputs.gemini_model }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Gemini CLI has been triggered to start implementation." >> $GITHUB_STEP_SUMMARY
+
+      - name: Handle errors
+        if: failure()
+        run: |
+          echo "### ❌ Error occurred" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Spec**: ${{ steps.validate-spec.outputs.spec_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
