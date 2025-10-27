@@ -4,9 +4,15 @@ on:
   workflow_call:
     inputs:
       spec_id:
-        description: 'Spec ID (e.g., 001-feature-name)'
-        required: true
+        description: 'Single spec ID for manual implementation (legacy compatibility)'
+        required: false
         type: string
+        default: ''
+      spec_ids:
+        description: 'Spec IDs to implement (newline-separated, leave empty for auto-detection from tasks.md changes)'
+        required: false
+        type: string
+        default: ''
       specs_dir:
         description: 'Directory containing specs (default: specs)'
         required: false
@@ -27,6 +33,11 @@ on:
         required: false
         type: string
         default: '/implement'
+      detect_from_git_diff:
+        description: 'Auto-detect spec IDs from git diff of tasks.md files (for tasks-changed workflow)'
+        required: false
+        type: boolean
+        default: false
     secrets:
       claude_code_oauth_token:
         description: 'Claude Code OAuth token'
@@ -39,58 +50,152 @@ permissions:
   id-token: write
 
 jobs:
-  implement:
+  detect-and-implement:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.detect_from_git_diff && 2 || 1 }}
 
-      - name: Validate spec exists
-        id: validate-spec
+      - name: Detect changed tasks.md files (auto mode)
+        id: detect-changes
+        if: inputs.detect_from_git_diff
         run: |
-          SPEC_ID="${{ inputs.spec_id }}"
           SPECS_DIR="${{ inputs.specs_dir }}"
-          TASKS_FILE="$SPECS_DIR/$SPEC_ID/tasks.md"
+          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD | grep "$SPECS_DIR/.*/tasks.md" || echo "")
 
-          if [ ! -f "$TASKS_FILE" ]; then
-            echo "Error: tasks.md not found at $TASKS_FILE"
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "⚠️ No tasks.md files changed"
+            echo "spec_ids=" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Changed tasks.md files:"
+            echo "$CHANGED_FILES"
+
+            SPEC_IDS=$(echo "$CHANGED_FILES" | sed -n "s|$SPECS_DIR/\([^/]*\)/.*|\1|p" | sort -u)
+            echo "spec_ids<<EOF" >> $GITHUB_OUTPUT
+            echo "$SPEC_IDS" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+
+            echo "✅ Extracted spec IDs:"
+            echo "$SPEC_IDS"
+          fi
+
+      - name: Use provided spec IDs (manual mode)
+        id: use-provided
+        if: ${{ !inputs.detect_from_git_diff }}
+        run: |
+          # Support both single spec_id (legacy) and multiple spec_ids
+          SPEC_ID="${{ inputs.spec_id }}"
+          SPEC_IDS="${{ inputs.spec_ids }}"
+
+          if [ -n "$SPEC_ID" ]; then
+            # Legacy single spec_id provided
+            FINAL_SPEC_IDS="$SPEC_ID"
+          elif [ -n "$SPEC_IDS" ]; then
+            # Multiple spec_ids provided
+            FINAL_SPEC_IDS="$SPEC_IDS"
+          else
+            echo "❌ Error: Either spec_id or spec_ids input is required when detect_from_git_diff is false"
             exit 1
           fi
 
-          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
-          echo "tasks_file=$TASKS_FILE" >> $GITHUB_OUTPUT
-          echo "✅ Found tasks.md at $TASKS_FILE"
+          echo "spec_ids<<EOF" >> $GITHUB_OUTPUT
+          echo "$FINAL_SPEC_IDS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "✅ Using provided spec IDs:"
+          echo "$FINAL_SPEC_IDS"
+
+      - name: Validate specs exist
+        id: validate-specs
+        run: |
+          SPECS_DIR="${{ inputs.specs_dir }}"
+
+          if [ "${{ inputs.detect_from_git_diff }}" = "true" ]; then
+            SPEC_IDS="${{ steps.detect-changes.outputs.spec_ids }}"
+          else
+            SPEC_IDS="${{ steps.use-provided.outputs.spec_ids }}"
+          fi
+
+          if [ -z "$SPEC_IDS" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          INVALID_SPECS=""
+          VALID_SPECS=""
+
+          while IFS= read -r SPEC_ID; do
+            [ -z "$SPEC_ID" ] && continue
+
+            TASKS_FILE="$SPECS_DIR/$SPEC_ID/tasks.md"
+            if [ ! -f "$TASKS_FILE" ]; then
+              echo "❌ Error: tasks.md not found at $TASKS_FILE"
+              INVALID_SPECS="${INVALID_SPECS}${SPEC_ID}\n"
+            else
+              echo "✅ Found tasks.md at $TASKS_FILE"
+              VALID_SPECS="${VALID_SPECS}${SPEC_ID}\n"
+            fi
+          done <<< "$SPEC_IDS"
+
+          if [ -n "$INVALID_SPECS" ]; then
+            echo "❌ Invalid specs found:"
+            echo -e "$INVALID_SPECS"
+            exit 1
+          fi
+
+          echo "spec_ids<<EOF" >> $GITHUB_OUTPUT
+          echo "$SPEC_IDS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          SPEC_COUNT=$(echo "$SPEC_IDS" | grep -c '^' || echo "0")
+          echo "spec_count=$SPEC_COUNT" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
 
       - name: Execute Claude Code Action
+        if: steps.validate-specs.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           claude_args: ${{ inputs.claude_args }}
           prompt: |
-            Run `${{ inputs.implement_command }} ${{ steps.validate-spec.outputs.spec_id }}` and complete the implementation.
+            The following spec(s) need to be implemented:
+            ${{ steps.validate-specs.outputs.spec_ids }}
 
-            CRITICAL: After ANY work is done (even partial implementation):
-            1. Commit all changes: `git add . && git commit -m "feat: implement ${{ steps.validate-spec.outputs.spec_id }}"`
-            2. Push to remote: `git push -u origin $(git branch --show-current)`
-            3. Create PR: `gh pr create --fill --base ${{ inputs.base_branch }}`
+            For each spec ID above:
+            1. Run `${{ inputs.implement_command }} <spec-id>` and complete the implementation
+            2. IMPORTANT: When implementation is interrupted or completed, you MUST update tasks.md to reflect the current status
+            3. After implementation, MUST do:
+               - Commit: `git add . && git commit -m "feat: implement <spec-id>"`
+               - Push: `git push -u origin $(git branch --show-current)`
+               - Create PR: `gh pr create --fill --base ${{ inputs.base_branch }}`
 
-            You MUST complete steps 1-3 even if implementation is incomplete. This is MANDATORY.
+            You MUST complete the commit/push/PR steps even if implementation is incomplete.
 
       - name: Report summary
+        if: steps.validate-specs.outputs.skip != 'true'
         run: |
           echo "### Implementation triggered ✅" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Spec**: ${{ steps.validate-spec.outputs.spec_id }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Tasks file**: ${{ steps.validate-spec.outputs.tasks_file }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Specs** (${{ steps.validate-specs.outputs.spec_count }}):" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.validate-specs.outputs.spec_ids }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Claude Code Action has been triggered to start implementation." >> $GITHUB_STEP_SUMMARY
+          echo "Claude Code Action has been triggered to implement tasks." >> $GITHUB_STEP_SUMMARY
+
+      - name: Handle no changes
+        if: steps.validate-specs.outputs.skip == 'true'
+        run: |
+          echo "### ℹ️ No specs to implement" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This workflow was triggered but no valid specs were detected." >> $GITHUB_STEP_SUMMARY
 
       - name: Handle errors
         if: failure()
         run: |
           echo "### ❌ Error occurred" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Spec**: ${{ steps.validate-spec.outputs.spec_id }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Check logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY

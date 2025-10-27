@@ -36,85 +36,12 @@ permissions:
 
 jobs:
   detect-and-implement:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Get changed tasks.md files
-        id: get-changed-files
-        run: |
-          SPECS_DIR="${{ inputs.specs_dir }}"
-          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD | grep "$SPECS_DIR/.*/tasks.md" || echo "")
-          echo "changed_files=$CHANGED_FILES" >> $GITHUB_OUTPUT
-
-          if [ -z "$CHANGED_FILES" ]; then
-            echo "⚠️ No tasks.md files changed"
-          else
-            echo "✅ Changed tasks.md files:"
-            echo "$CHANGED_FILES"
-          fi
-
-      - name: Extract spec IDs
-        id: extract-spec-ids
-        if: steps.get-changed-files.outputs.changed_files != ''
-        run: |
-          SPECS_DIR="${{ inputs.specs_dir }}"
-          CHANGED_FILES="${{ steps.get-changed-files.outputs.changed_files }}"
-
-          SPEC_IDS=$(echo "$CHANGED_FILES" | sed -n "s|$SPECS_DIR/\([^/]*\)/.*|\1|p" | sort -u)
-          echo "spec_ids=$SPEC_IDS" >> $GITHUB_OUTPUT
-
-          echo "✅ Extracted spec IDs:"
-          echo "$SPEC_IDS"
-
-          SPEC_COUNT=$(echo "$SPEC_IDS" | wc -l | tr -d ' ')
-          echo "spec_count=$SPEC_COUNT" >> $GITHUB_OUTPUT
-
-      - name: Execute Claude Code Action
-        if: steps.extract-spec-ids.outputs.spec_ids != ''
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
-          claude_args: ${{ inputs.claude_args }}
-          prompt: |
-            The following spec(s) had their tasks.md updated:
-            ${{ steps.extract-spec-ids.outputs.spec_ids }}
-
-            For each spec ID above:
-            1. Run `${{ inputs.implement_command }} <spec-id>` and complete the implementation
-            2. After implementation, MUST do:
-               - Commit: `git add . && git commit -m "feat: implement <spec-id>"`
-               - Push: `git push -u origin $(git branch --show-current)`
-               - Create PR: `gh pr create --fill --base ${{ inputs.base_branch }}`
-
-            You MUST complete the commit/push/PR steps even if implementation is incomplete.
-
-      - name: Report summary
-        if: steps.extract-spec-ids.outputs.spec_ids != ''
-        run: |
-          echo "### Tasks implementation triggered ✅" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Changed specs** (${{ steps.extract-spec-ids.outputs.spec_count }}):" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.extract-spec-ids.outputs.spec_ids }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Claude Code Action has been triggered to implement tasks." >> $GITHUB_STEP_SUMMARY
-
-      - name: Handle no changes
-        if: steps.get-changed-files.outputs.changed_files == ''
-        run: |
-          echo "### ℹ️ No tasks.md changes detected" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "This workflow was triggered but no tasks.md files were modified." >> $GITHUB_STEP_SUMMARY
-
-      - name: Handle errors
-        if: failure()
-        run: |
-          echo "### ❌ Error occurred" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+    uses: ./.github/workflows/specify-implement-reusable.yml
+    with:
+      detect_from_git_diff: true
+      specs_dir: ${{ inputs.specs_dir }}
+      base_branch: ${{ inputs.base_branch }}
+      claude_args: ${{ inputs.claude_args }}
+      implement_command: ${{ inputs.implement_command }}
+    secrets:
+      claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}

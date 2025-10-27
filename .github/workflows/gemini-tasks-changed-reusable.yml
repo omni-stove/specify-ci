@@ -82,9 +82,9 @@ jobs:
 
       - name: Execute Gemini CLI
         if: steps.extract-spec-ids.outputs.spec_ids != ''
-        uses: google-github-actions/run-gemini-cli@v1
+        uses: google-github-actions/run-gemini-cli@v0.1.14
         with:
-          model: ${{ inputs.gemini_model }}
+          gemini_model: ${{ inputs.gemini_model }}
           prompt: |
             The following spec(s) had their tasks.md updated:
             ${{ steps.extract-spec-ids.outputs.spec_ids }}
